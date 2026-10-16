@@ -492,3 +492,185 @@ The script ends with `All checks passed.` after asserting:
 
 Multi-head attention, positional encoding, transformer blocks, feed-forward
 layers, layer normalization, training, token generation, visualization.
+
+---
+
+## M5 — Multi-Head Attention
+
+**Objective:** run several causal attention heads in parallel on the same input,
+concatenate their outputs, and mix them with a final output projection `W_O`.
+
+```
+head_h       = softmax( Q_h @ K_h.T / sqrt(d_k) + M ) @ V_h     (M = causal mask: 0 or -inf)
+concatenated = [head_1 | head_2]
+final_output = concatenated @ W_O
+```
+
+### What multi-head attention is, and why transformers use it
+
+A single head produces one attention pattern per token. With several heads, each
+with its own `W_Q`, `W_K` and `W_V`, the model can compute several different
+patterns at once over the same input. For example, one head may focus on the
+token itself while another focuses on the previous token. Each head also carries
+different value information. Running heads on small `d_k`-dimensional slices
+costs about the same as one big head.
+
+> In M5 the two patterns below are **built in by hand** so they're easy to see.
+> Nothing was learned, and the heads carry no real linguistic meaning.
+
+### Architecture
+
+| Setting | Value |
+|---|---|
+| Tokens | The, cat, eats, fish |
+| Sequence length | 4 |
+| Model dimension | 4 |
+| Heads | 2 |
+| `d_k` = `d_v` per head | 2 |
+| Causal mask | Enabled, the same mask applied inside each head |
+
+The input `X` is the 4×4 identity (one-hot embeddings). This means `X @ W = W`,
+so **row i of each projection matrix is token i's query/key/value vector**.
+
+| Matrix | Rows (The, cat, eats, fish) | Purpose |
+|---|---|---|
+| `W_Q1` | `[2,0] [0,2] [-2,0] [0,-2]` | Head 1: each query points at its own key… |
+| `W_K1` | `[1,0] [0,1] [-1,0] [0,-1]` | …so each token favors **itself** |
+| `W_V1` | `[1,0] [0,1] [1,1] [0,2]` | Head 1 values |
+| `W_Q2` | `[0,2] [0,2] [-2,0] [0,-2]` | Head 2: each query points at the previous token's key… |
+| `W_K2` | `[0,1] [-1,0] [0,-1] [1,0]` | …so each token favors the **previous token** |
+| `W_V2` | `[0,2] [1,0] [2,0] [1,1]` | Head 2 values |
+
+```
+W_O = [[1, 0,  1,  0],     final = [h1_a + h2_a,  h1_b + h2_b,  h1_a - h2_a,  h1_b - h2_b]
+       [0, 1,  0,  1],
+       [1, 0, -1,  0],
+       [0, 1,  0, -1]]
+```
+
+### Tensor shapes
+
+| Component | Shape |
+|---|---|
+| Input `X` | (4, 4) |
+| `W_Q`, `W_K`, `W_V` per head | (4, 2) |
+| Q, K, V per head | (4, 2) |
+| Scores per head | (4, 4) |
+| Attention weights per head | (4, 4) |
+| Output per head | (4, 2) |
+| Concatenated output | (4, 4) |
+| `W_O` | (4, 4) |
+| Final output | (4, 4) |
+
+### How each head calculates attention
+
+Each head does exactly what M4 did, with its own matrices:
+
+1. `Q = X @ W_Q`, `K = X @ W_K`, `V = X @ W_V`, giving shape (4, 2).
+2. `scores = Q @ K.T / sqrt(2)`, giving shape (4, 4).
+3. Future positions are set to `-inf`. Every head has its own score matrix, so
+   the mask must be applied inside every head. One head without a mask would
+   leak future information into the result.
+4. `softmax(..., dim=-1)` gives the attention weights. Future weights are exactly 0.
+5. `weights @ V` gives the head output, shape (4, 2).
+
+### Attention-weight comparison
+
+```
+Head 1 (favors self)                      Head 2 (favors previous token)
+          The    cat   eats   fish                  The    cat   eats   fish
+The     1.000  0.000  0.000  0.000        The     1.000  0.000  0.000  0.000
+cat     0.196  0.804  0.000  0.000        cat     0.804  0.196  0.000  0.000
+eats    0.045  0.187  0.768  0.000        eats    0.164  0.673  0.164  0.000
+fish    0.157  0.038  0.157  0.647        fish    0.038  0.157  0.647  0.157
+```
+
+| Token | Head 1 attends most to | Head 2 attends most to |
+|---|---|---|
+| The | The | The (the only option) |
+| cat | cat | The |
+| eats | eats | cat |
+| fish | fish | eats |
+
+The input is the same. Only the projection matrices differ, and that alone
+gives a completely different attention pattern.
+
+### Why concatenate, and the role of `W_O`
+
+`torch.cat([head1_output, head2_output], dim=-1)` puts the two (4, 2) outputs
+side by side to make (4, 4). Columns 0–1 are head 1's features and columns 2–3
+are head 2's. Nothing is added or averaged at this stage, so each head's
+information stays separate.
+
+`W_O` then mixes those features. Each final feature here is a sum or difference
+of one head-1 feature and one head-2 feature. In a trained transformer `W_O` is
+learned, and it decides how to combine what the heads found.
+
+```
+Concatenated [head1 | head2]             Final output (concatenated @ W_O)
+The   [1.0000, 0.0000, 0.0000, 2.0000]   [1.0000, 2.0000,  1.0000, -2.0000]
+cat   [0.1956, 0.8044, 0.1956, 1.6089]   [0.3911, 2.4133,  0.0000, -0.8044]
+eats  [0.8133, 0.9546, 1.0000, 0.3272]   [1.8133, 1.2818, -0.1867,  0.6275]
+fish  [0.3146, 1.4898, 1.6089, 0.2338]   [1.9235, 1.7236, -1.2942,  1.2560]
+```
+
+### Experiment A: change only `W_V1`
+
+The columns of `W_V1` are swapped. Everything else is unchanged.
+
+| Quantity | Changed? |
+|---|---|
+| Head 1 scores | No |
+| Head 1 weights | No |
+| Head 1 output | **Yes**, e.g. "The" `[1, 0]` → `[0, 1]` |
+| Head 2 weights | No |
+| Head 2 output | No |
+| Concatenated output | **Yes**, columns 0–1 only |
+| Final output | **Yes**, every row, e.g. "The" `[1, 2, 1, -2]` → `[0, 3, 0, -1]` |
+
+Values never enter the score calculation, so they can't move the attention
+distribution. They only change *what information* is carried along it. Heads are
+independent, so head 2 is unaffected. `W_O` then spreads head 1's change across
+every final feature.
+
+### Experiment B: future-token leakage
+
+Only the "fish" embedding is changed, from `[0, 0, 0, 1]` to `[1, 1, 1, 1]`.
+
+| Row | Head 1 | Head 2 | Concatenated | Final output |
+|---|---|---|---|---|
+| The | unchanged | unchanged | unchanged | unchanged |
+| cat | unchanged | unchanged | unchanged | unchanged |
+| eats | unchanged | unchanged | unchanged | unchanged |
+| fish | changed | changed | changed | changed |
+
+Causal masking survives concatenation and the output projection for two reasons:
+
+- Each head's mask already gives "fish" zero weight in every earlier row.
+- Both concatenation and `@ W_O` act on **one token's row at a time**. `W_O` mixes
+  features within a row, never across sequence positions. So there is no path
+  for row 3 to reach rows 0–2.
+
+### Run
+
+```bash
+python src/multi_head_attention.py
+```
+
+### Verification
+
+The script ends with `All checks passed.` after asserting:
+
+- **Shapes:** every shape in the table above.
+- **Weights:** every row sums to 1, no weight is negative, every future weight is *exactly* 0, and "The" attends only to itself. These are checked for all six head runs.
+- **Heads differ:** the two heads have different weights.
+- **Experiment A:** `W_V1` changes head 1's output but not its scores or weights, leaves head 2 untouched, and changes the concatenated and final outputs.
+- **Experiment B:** changing the last token leaves rows 0–2 unchanged in both heads, the concatenated output and the final output.
+
+The script does not use `torch.nn.MultiheadAttention`, `torch.nn.Transformer` or
+`scaled_dot_product_attention`. Everything is plain tensor operations.
+
+### Out of scope for M5
+
+Positional encoding, feed-forward layers, layer normalization, residual
+connections, transformer blocks, training, token generation, visualization.
