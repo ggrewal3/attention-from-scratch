@@ -106,6 +106,9 @@ W_O = torch.tensor([
 # Causal mask, shared by both heads. True = allowed (same or earlier position).
 causal_mask = torch.tril(torch.ones(seq_len, seq_len, dtype=torch.bool))
 
+# Each head's (W_Q, W_K, W_V). Importable by other scripts (e.g. M6 visualization).
+head_matrices = [(W_Q1, W_K1, W_V1), (W_Q2, W_K2, W_V2)]
+
 
 # ---------------------------------------------------------------------------
 # Helper functions
@@ -179,155 +182,160 @@ def print_row_comparison(label_a, tensor_a, label_b, tensor_b):
         print(f"{token:<6} {row_a:>34} {row_b:>34}   {'YES' if changed else 'no'}")
 
 
-# ---------------------------------------------------------------------------
-# 3. Run multi-head attention
-# ---------------------------------------------------------------------------
-head_matrices = [(W_Q1, W_K1, W_V1), (W_Q2, W_K2, W_V2)]
-heads, concatenated, final_output = multi_head_attention(X, head_matrices, W_O, causal_mask)
-head1, head2 = heads
 
-print("=================== 1. Input ===================")
-print("Tokens:", tokens)
-print_tensor("Input embeddings X", X)
-print(f"seq_len = {seq_len}, model_dim = {model_dim}, num_heads = {num_heads}, head_dim = {head_dim}")
-print_tensor("Causal mask (shared by both heads)", causal_mask)
-print()
+def main():
+    # ---------------------------------------------------------------------------
+    # 3. Run multi-head attention
+    # ---------------------------------------------------------------------------
+    heads, concatenated, final_output = multi_head_attention(X, head_matrices, W_O, causal_mask)
+    head1, head2 = heads
 
-for head_number, (head, (W_Q, W_K, W_V)) in enumerate(zip(heads, head_matrices), start=1):
-    print(f"=================== {head_number + 1}. Head {head_number} ===================")
-    print_tensor(f"W_Q{head_number}", W_Q)
-    print_tensor(f"W_K{head_number}", W_K)
-    print_tensor(f"W_V{head_number}", W_V)
-    print_tensor(f"Q{head_number} = X @ W_Q{head_number}", head["Q"])
-    print_tensor(f"K{head_number} = X @ W_K{head_number}", head["K"])
-    print_tensor(f"V{head_number} = X @ W_V{head_number}", head["V"])
-    print_tensor(f"Scaled SCORES Q{head_number} @ K{head_number}.T / sqrt(2)", head["scaled_scores"])
-    print_tensor("Masked SCORES (future = -inf)", head["masked_scores"])
-    print_weight_table(f"Head {head_number} attention WEIGHTS", head["weights"])
-    print_tensor(f"Head {head_number} OUTPUT = weights @ V{head_number}", head["output"])
+    print("=================== 1. Input ===================")
+    print("Tokens:", tokens)
+    print_tensor("Input embeddings X", X)
+    print(f"seq_len = {seq_len}, model_dim = {model_dim}, num_heads = {num_heads}, head_dim = {head_dim}")
+    print_tensor("Causal mask (shared by both heads)", causal_mask)
     print()
 
-# ---------------------------------------------------------------------------
-# 4. Compare the heads
-# ---------------------------------------------------------------------------
-print("=================== 4. Head comparison ===================")
-print_weight_table("Head 1 WEIGHTS", head1["weights"])
-print_weight_table("Head 2 WEIGHTS", head2["weights"])
-print("Most-attended token per head:")
-print(f"  {'token':<6} {'head 1':<8} {'head 2':<8}")
-for row_index, token in enumerate(tokens):
-    top_1 = tokens[head1["weights"][row_index].argmax().item()]
-    top_2 = tokens[head2["weights"][row_index].argmax().item()]
-    print(f"  {token:<6} {top_1:<8} {top_2:<8}")
-print("(Head 1 was built to favor the token itself, head 2 the previous token.)")
-print()
+    for head_number, (head, (W_Q, W_K, W_V)) in enumerate(zip(heads, head_matrices), start=1):
+        print(f"=================== {head_number + 1}. Head {head_number} ===================")
+        print_tensor(f"W_Q{head_number}", W_Q)
+        print_tensor(f"W_K{head_number}", W_K)
+        print_tensor(f"W_V{head_number}", W_V)
+        print_tensor(f"Q{head_number} = X @ W_Q{head_number}", head["Q"])
+        print_tensor(f"K{head_number} = X @ W_K{head_number}", head["K"])
+        print_tensor(f"V{head_number} = X @ W_V{head_number}", head["V"])
+        print_tensor(f"Scaled SCORES Q{head_number} @ K{head_number}.T / sqrt(2)", head["scaled_scores"])
+        print_tensor("Masked SCORES (future = -inf)", head["masked_scores"])
+        print_weight_table(f"Head {head_number} attention WEIGHTS", head["weights"])
+        print_tensor(f"Head {head_number} OUTPUT = weights @ V{head_number}", head["output"])
+        print()
 
-# ---------------------------------------------------------------------------
-# 5. Concatenation and output projection
-# ---------------------------------------------------------------------------
-print("=================== 5. Concatenate and project ===================")
-print("Head 1 output shape:", tuple(head1["output"].shape))
-print("Head 2 output shape:", tuple(head2["output"].shape))
-print_tensor("Concatenated [head1 | head2]", concatenated)
-print_tensor("W_O (output projection)", W_O)
-print_tensor("Final output = concatenated @ W_O", final_output)
-print()
+    # ---------------------------------------------------------------------------
+    # 4. Compare the heads
+    # ---------------------------------------------------------------------------
+    print("=================== 4. Head comparison ===================")
+    print_weight_table("Head 1 WEIGHTS", head1["weights"])
+    print_weight_table("Head 2 WEIGHTS", head2["weights"])
+    print("Most-attended token per head:")
+    print(f"  {'token':<6} {'head 1':<8} {'head 2':<8}")
+    for row_index, token in enumerate(tokens):
+        top_1 = tokens[head1["weights"][row_index].argmax().item()]
+        top_2 = tokens[head2["weights"][row_index].argmax().item()]
+        print(f"  {token:<6} {top_1:<8} {top_2:<8}")
+    print("(Head 1 was built to favor the token itself, head 2 the previous token.)")
+    print()
 
-# ---------------------------------------------------------------------------
-# 6. Experiment A: change only W_V1
-# ---------------------------------------------------------------------------
-# Swap the two columns of W_V1. Q1, K1, all of head 2, W_O and the mask stay
-# the same, so head 1's scores and weights cannot change. Only the values it
-# mixes change.
-W_V1_modified = W_V1[:, [1, 0]]
-heads_A, concatenated_A, final_output_A = multi_head_attention(
-    X, [(W_Q1, W_K1, W_V1_modified), (W_Q2, W_K2, W_V2)], W_O, causal_mask)
-head1_A, head2_A = heads_A
+    # ---------------------------------------------------------------------------
+    # 5. Concatenation and output projection
+    # ---------------------------------------------------------------------------
+    print("=================== 5. Concatenate and project ===================")
+    print("Head 1 output shape:", tuple(head1["output"].shape))
+    print("Head 2 output shape:", tuple(head2["output"].shape))
+    print_tensor("Concatenated [head1 | head2]", concatenated)
+    print_tensor("W_O (output projection)", W_O)
+    print_tensor("Final output = concatenated @ W_O", final_output)
+    print()
 
-print("=================== 6. Experiment A: change W_V1 only ===================")
-print_tensor("Original W_V1", W_V1)
-print_tensor("Modified W_V1 (columns swapped)", W_V1_modified)
-print("Head 1 scores unchanged: ", torch.allclose(head1["scaled_scores"], head1_A["scaled_scores"]))
-print("Head 1 weights unchanged:", torch.allclose(head1["weights"], head1_A["weights"]))
-print("Head 2 weights unchanged:", torch.allclose(head2["weights"], head2_A["weights"]))
-print("Head 2 output unchanged: ", torch.allclose(head2["output"], head2_A["output"]))
-print("\nHead 1 OUTPUT:")
-print_row_comparison("before", head1["output"], "after", head1_A["output"])
-print("\nConcatenated:")
-print_row_comparison("before", concatenated, "after", concatenated_A)
-print("\nFinal output:")
-print_row_comparison("before", final_output, "after", final_output_A)
-print()
+    # ---------------------------------------------------------------------------
+    # 6. Experiment A: change only W_V1
+    # ---------------------------------------------------------------------------
+    # Swap the two columns of W_V1. Q1, K1, all of head 2, W_O and the mask stay
+    # the same, so head 1's scores and weights cannot change. Only the values it
+    # mixes change.
+    W_V1_modified = W_V1[:, [1, 0]]
+    heads_A, concatenated_A, final_output_A = multi_head_attention(
+        X, [(W_Q1, W_K1, W_V1_modified), (W_Q2, W_K2, W_V2)], W_O, causal_mask)
+    head1_A, head2_A = heads_A
 
-# ---------------------------------------------------------------------------
-# 7. Experiment B: future-token leakage
-# ---------------------------------------------------------------------------
-# Change ONLY the last token's embedding. All matrices and the mask stay fixed.
-X_modified = X.clone()
-X_modified[3] = torch.tensor([1.0, 1.0, 1.0, 1.0])
-heads_B, concatenated_B, final_output_B = multi_head_attention(X_modified, head_matrices, W_O, causal_mask)
-head1_B, head2_B = heads_B
-earlier_tokens = slice(0, 3)  # "The", "cat", "eats"
+    print("=================== 6. Experiment A: change W_V1 only ===================")
+    print_tensor("Original W_V1", W_V1)
+    print_tensor("Modified W_V1 (columns swapped)", W_V1_modified)
+    print("Head 1 scores unchanged: ", torch.allclose(head1["scaled_scores"], head1_A["scaled_scores"]))
+    print("Head 1 weights unchanged:", torch.allclose(head1["weights"], head1_A["weights"]))
+    print("Head 2 weights unchanged:", torch.allclose(head2["weights"], head2_A["weights"]))
+    print("Head 2 output unchanged: ", torch.allclose(head2["output"], head2_A["output"]))
+    print("\nHead 1 OUTPUT:")
+    print_row_comparison("before", head1["output"], "after", head1_A["output"])
+    print("\nConcatenated:")
+    print_row_comparison("before", concatenated, "after", concatenated_A)
+    print("\nFinal output:")
+    print_row_comparison("before", final_output, "after", final_output_A)
+    print()
 
-print("=================== 7. Experiment B: change the last token only ===================")
-print("Original 'fish' embedding:", X[3].tolist(), "-> modified:", X_modified[3].tolist())
-print("\nHead 1 OUTPUT:")
-print_row_comparison("before", head1["output"], "after", head1_B["output"])
-print("\nHead 2 OUTPUT:")
-print_row_comparison("before", head2["output"], "after", head2_B["output"])
-print("\nConcatenated:")
-print_row_comparison("before", concatenated, "after", concatenated_B)
-print("\nFinal output:")
-print_row_comparison("before", final_output, "after", final_output_B)
-print("(W_O multiplies each row separately, so it cannot carry 'fish' into earlier rows.)")
-print()
+    # ---------------------------------------------------------------------------
+    # 7. Experiment B: future-token leakage
+    # ---------------------------------------------------------------------------
+    # Change ONLY the last token's embedding. All matrices and the mask stay fixed.
+    X_modified = X.clone()
+    X_modified[3] = torch.tensor([1.0, 1.0, 1.0, 1.0])
+    heads_B, concatenated_B, final_output_B = multi_head_attention(X_modified, head_matrices, W_O, causal_mask)
+    head1_B, head2_B = heads_B
+    earlier_tokens = slice(0, 3)  # "The", "cat", "eats"
 
-# ---------------------------------------------------------------------------
-# 8. Verification
-# ---------------------------------------------------------------------------
-future_positions = ~causal_mask
-all_heads = heads + heads_A + heads_B
+    print("=================== 7. Experiment B: change the last token only ===================")
+    print("Original 'fish' embedding:", X[3].tolist(), "-> modified:", X_modified[3].tolist())
+    print("\nHead 1 OUTPUT:")
+    print_row_comparison("before", head1["output"], "after", head1_B["output"])
+    print("\nHead 2 OUTPUT:")
+    print_row_comparison("before", head2["output"], "after", head2_B["output"])
+    print("\nConcatenated:")
+    print_row_comparison("before", concatenated, "after", concatenated_B)
+    print("\nFinal output:")
+    print_row_comparison("before", final_output, "after", final_output_B)
+    print("(W_O multiplies each row separately, so it cannot carry 'fish' into earlier rows.)")
+    print()
 
-# 1-9. Shapes
-assert X.shape == (4, 4), "X should be (4, 4)"
-for W in [W_Q1, W_K1, W_V1, W_Q2, W_K2, W_V2, W_V1_modified]:
-    assert W.shape == (4, 2), "Each projection matrix should be (4, 2)"
-for head in all_heads:
-    for name in ["Q", "K", "V"]:
-        assert head[name].shape == (4, 2), f"{name} should be (4, 2)"
-    assert head["scaled_scores"].shape == (4, 4), "Scores should be (4, 4)"
-    assert head["weights"].shape == (4, 4), "Weights should be (4, 4)"
-    assert head["output"].shape == (4, 2), "Head output should be (4, 2)"
-assert concatenated.shape == (4, 4), "Concatenated output should be (4, 4)"
-assert W_O.shape == (4, 4), "W_O should be (4, 4)"
-assert final_output.shape == (4, 4), "Final output should be (4, 4)"
+    # ---------------------------------------------------------------------------
+    # 8. Verification
+    # ---------------------------------------------------------------------------
+    future_positions = ~causal_mask
+    all_heads = heads + heads_A + heads_B
 
-# 10-13. Attention weights
-for head in all_heads:
-    weights = head["weights"]
-    assert torch.allclose(weights.sum(dim=-1), torch.ones(seq_len), atol=TOLERANCE), "Rows should sum to 1"
-    assert (weights >= 0).all(), "Weights should be nonnegative"
-    assert (weights[future_positions] == 0).all(), "Future positions should get exactly zero weight"
-    assert torch.allclose(weights[0, 0], torch.tensor(1.0)), "First token should attend only to itself"
+    # 1-9. Shapes
+    assert X.shape == (4, 4), "X should be (4, 4)"
+    for W in [W_Q1, W_K1, W_V1, W_Q2, W_K2, W_V2, W_V1_modified]:
+        assert W.shape == (4, 2), "Each projection matrix should be (4, 2)"
+    for head in all_heads:
+        for name in ["Q", "K", "V"]:
+            assert head[name].shape == (4, 2), f"{name} should be (4, 2)"
+        assert head["scaled_scores"].shape == (4, 4), "Scores should be (4, 4)"
+        assert head["weights"].shape == (4, 4), "Weights should be (4, 4)"
+        assert head["output"].shape == (4, 2), "Head output should be (4, 2)"
+    assert concatenated.shape == (4, 4), "Concatenated output should be (4, 4)"
+    assert W_O.shape == (4, 4), "W_O should be (4, 4)"
+    assert final_output.shape == (4, 4), "Final output should be (4, 4)"
 
-# 14. Heads differ
-assert not torch.allclose(head1["weights"], head2["weights"], atol=1e-2), \
-    "The two heads should produce different attention distributions"
+    # 10-13. Attention weights
+    for head in all_heads:
+        weights = head["weights"]
+        assert torch.allclose(weights.sum(dim=-1), torch.ones(seq_len), atol=TOLERANCE), "Rows should sum to 1"
+        assert (weights >= 0).all(), "Weights should be nonnegative"
+        assert (weights[future_positions] == 0).all(), "Future positions should get exactly zero weight"
+        assert torch.allclose(weights[0, 0], torch.tensor(1.0)), "First token should attend only to itself"
 
-# 15-17. Experiment A
-assert torch.allclose(head1["scaled_scores"], head1_A["scaled_scores"]), "W_V1 must not change head 1 scores"
-assert torch.allclose(head1["weights"], head1_A["weights"]), "W_V1 must not change head 1 weights"
-assert not torch.allclose(head1["output"], head1_A["output"], atol=TOLERANCE), "W_V1 should change head 1 output"
-assert torch.allclose(head2["weights"], head2_A["weights"]), "W_V1 must not change head 2 weights"
-assert torch.allclose(head2["output"], head2_A["output"]), "W_V1 must not change head 2 output"
-assert not torch.allclose(concatenated, concatenated_A, atol=TOLERANCE), "Concatenated output should change"
-assert not torch.allclose(final_output, final_output_A, atol=TOLERANCE), "Final output should change"
+    # 14. Heads differ
+    assert not torch.allclose(head1["weights"], head2["weights"], atol=1e-2), \
+        "The two heads should produce different attention distributions"
 
-# 18-19. Experiment B
-for before, after in [(head1["output"], head1_B["output"]), (head2["output"], head2_B["output"]),
-                      (concatenated, concatenated_B), (final_output, final_output_B)]:
-    assert torch.allclose(before[earlier_tokens], after[earlier_tokens], atol=TOLERANCE), \
-        "Changing the last token must not change earlier rows"
+    # 15-17. Experiment A
+    assert torch.allclose(head1["scaled_scores"], head1_A["scaled_scores"]), "W_V1 must not change head 1 scores"
+    assert torch.allclose(head1["weights"], head1_A["weights"]), "W_V1 must not change head 1 weights"
+    assert not torch.allclose(head1["output"], head1_A["output"], atol=TOLERANCE), "W_V1 should change head 1 output"
+    assert torch.allclose(head2["weights"], head2_A["weights"]), "W_V1 must not change head 2 weights"
+    assert torch.allclose(head2["output"], head2_A["output"]), "W_V1 must not change head 2 output"
+    assert not torch.allclose(concatenated, concatenated_A, atol=TOLERANCE), "Concatenated output should change"
+    assert not torch.allclose(final_output, final_output_A, atol=TOLERANCE), "Final output should change"
 
-print("=================== Verification ===================")
-print("All checks passed.")
+    # 18-19. Experiment B
+    for before, after in [(head1["output"], head1_B["output"]), (head2["output"], head2_B["output"]),
+                          (concatenated, concatenated_B), (final_output, final_output_B)]:
+        assert torch.allclose(before[earlier_tokens], after[earlier_tokens], atol=TOLERANCE), \
+            "Changing the last token must not change earlier rows"
+
+    print("=================== Verification ===================")
+    print("All checks passed.")
+
+
+if __name__ == "__main__":
+    main()

@@ -674,3 +674,116 @@ The script does not use `torch.nn.MultiheadAttention`, `torch.nn.Transformer` or
 
 Positional encoding, feed-forward layers, layer normalization, residual
 connections, transformer blocks, training, token generation, visualization.
+
+---
+
+## M6 — Attention Visualization
+
+**Objective:** draw heatmaps of the M5 two-head causal attention so the patterns
+can be seen at a glance.
+
+### Why visualize attention?
+
+Matrices of numbers are hard to scan. A heatmap shows right away which tokens
+each query focuses on, how heads differ, and where the causal mask cuts off
+attention. Visualization is a common first step when inspecting a transformer.
+(In trained models, attention maps are a debugging aid, not a full explanation
+of the model's behavior.)
+
+### Generate the figures
+
+```bash
+pip install -r requirements.txt   # adds matplotlib
+python src/visualize_attention.py
+```
+
+The script imports M5's inputs, matrices and `multi_head_attention()` function
+directly from [src/multi_head_attention.py](src/multi_head_attention.py), so
+every value shown is computed by M5. No numbers are copied in by hand. The
+figures are saved to `images/` using Matplotlib's non-interactive `Agg` backend,
+so no windows open.
+
+> To make M5 importable, its printing, experiments and assertions were moved into
+> a `main()` function that runs only when the file is executed directly. Running
+> `python src/multi_head_attention.py` produces byte-for-byte the same output as before.
+
+### How to read the heatmaps
+
+- **Rows** are query tokens (the token doing the attending).
+- **Columns** are key tokens (the token being attended to).
+- Each cell shows the attention weight, and each row sums to 1.
+- **Darker blue = larger weight.** Both head figures use the same 0–1 color
+  scale, so they can be compared directly.
+- **Hatched cells** are future positions blocked by the causal mask.
+
+### Figure 1 — Head 1
+
+![Head 1 Attention](images/head1_attention.png)
+
+Head 1's strongest weight in every row is on the **diagonal**: each token
+attends most to itself (cat → cat 0.80, eats → eats 0.77, fish → fish 0.65).
+
+### Figure 2 — Head 2
+
+![Head 2 Attention](images/head2_attention.png)
+
+Head 2's strongest weight sits **one step left of the diagonal**: each token
+attends most to the previous token (cat → The 0.80, eats → cat 0.67,
+fish → eats 0.65). "The" has no previous token. The mask leaves it only itself,
+so it gets weight 1.00 in both heads.
+
+### Why the upper-right triangle is zero
+
+Every cell above the diagonal is a future position. M4/M5 set those scores to
+`-inf` *before* softmax, and `exp(-inf) = 0`, so the weights there are exactly
+zero in both heads.
+
+### Figure 3 — Difference between heads
+
+![Difference Between Heads](images/head_difference.png)
+
+`difference = head1_weights - head2_weights`, drawn with a diverging color scale
+centered at zero:
+
+- **Red (positive):** Head 1 attends more. This lines up along the diagonal (self).
+- **Blue (negative):** Head 2 attends more. This lines up one step below the diagonal (previous token).
+- **White (zero):** both heads agree. This happens for "The" (both 1.00) and for
+  every blocked cell (both 0).
+
+The figure makes it obvious that the two heads split the work: one looks at the
+current token, the other at the previous one.
+
+### Figure 4 — Causal mask
+
+![Causal Mask](images/causal_mask.png)
+
+This is the actual `causal_mask` tensor from M5. Allowed positions are the token
+itself and everything before it. Blocked positions are future tokens, which get
+`-inf` before softmax.
+
+### Why these particular patterns?
+
+The patterns were **designed by hand**, not learned. M5's input `X` is the
+identity matrix, so row *i* of each projection matrix is token *i*'s query or key:
+
+- In head 1, each query points in the same direction as its own key, giving the
+  largest dot product on the diagonal.
+- In head 2, each query points in the direction of the previous token's key,
+  giving the largest dot product just below the diagonal.
+
+Trained transformers often develop "previous-token" and similar heads on their
+own, but nothing here was trained. These matrices simply encode the patterns directly.
+
+### Verification
+
+`visualize_attention.py` ends with `All checks passed.` after asserting:
+
+- **Shapes:** both weight matrices and the mask are (4, 4).
+- **Weights:** every row sums to 1, no weight is negative, and future weights are exactly 0.
+- **Difference:** the difference matrix equals `head1 - head2`, and the two heads are not identical.
+- **Files:** all four PNG files exist and are nonempty.
+
+### Out of scope for M6
+
+Transformer blocks, positional encoding, feed-forward layers, layer normalization,
+residual connections, training, inference, token generation, interactive dashboards.
