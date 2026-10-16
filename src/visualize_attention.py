@@ -121,55 +121,60 @@ def save_mask_heatmap(mask, path):
     plt.close(figure)
 
 
-# ---------------------------------------------------------------------------
-# 1. Compute attention with M5's code
-# ---------------------------------------------------------------------------
-heads, _, _ = multi_head_attention(X, head_matrices, W_O, causal_mask)
-head1_weights = heads[0]["weights"]
-head2_weights = heads[1]["weights"]
+def main():
+    # -----------------------------------------------------------------------
+    # 1. Compute attention with M5's code
+    # -----------------------------------------------------------------------
+    heads, _, _ = multi_head_attention(X, head_matrices, W_O, causal_mask)
+    head1_weights = heads[0]["weights"]
+    head2_weights = heads[1]["weights"]
 
-# Signed difference: positive = Head 1 attends more, negative = Head 2 attends more.
-difference = head1_weights - head2_weights
+    # Signed difference: positive = Head 1 attends more, negative = Head 2 attends more.
+    difference = head1_weights - head2_weights
 
-print("Head 1 weights (from M5):\n", head1_weights)
-print("Head 2 weights (from M5):\n", head2_weights)
-print("Head 1 - Head 2:\n", difference)
-print()
+    print("Head 1 weights (from M5):\n", head1_weights)
+    print("Head 2 weights (from M5):\n", head2_weights)
+    print("Head 1 - Head 2:\n", difference)
+    print()
 
-# ---------------------------------------------------------------------------
-# 2. Draw and save figures
-# ---------------------------------------------------------------------------
-IMAGES_DIR.mkdir(exist_ok=True)
-output_paths = {
-    "head1": IMAGES_DIR / "head1_attention.png",
-    "head2": IMAGES_DIR / "head2_attention.png",
-    "difference": IMAGES_DIR / "head_difference.png",
-    "mask": IMAGES_DIR / "causal_mask.png",
-}
+    # -----------------------------------------------------------------------
+    # 2. Draw and save figures
+    # -----------------------------------------------------------------------
+    IMAGES_DIR.mkdir(exist_ok=True)
+    output_paths = {
+        "head1": IMAGES_DIR / "head1_attention.png",
+        "head2": IMAGES_DIR / "head2_attention.png",
+        "difference": IMAGES_DIR / "head_difference.png",
+        "mask": IMAGES_DIR / "causal_mask.png",
+    }
 
-save_attention_heatmap(head1_weights, "Head 1 — Causal Self-Attention", output_paths["head1"])
-save_attention_heatmap(head2_weights, "Head 2 — Causal Self-Attention", output_paths["head2"])
-save_difference_heatmap(difference, output_paths["difference"])
-save_mask_heatmap(causal_mask, output_paths["mask"])
+    save_attention_heatmap(head1_weights, "Head 1 — Causal Self-Attention", output_paths["head1"])
+    save_attention_heatmap(head2_weights, "Head 2 — Causal Self-Attention", output_paths["head2"])
+    save_difference_heatmap(difference, output_paths["difference"])
+    save_mask_heatmap(causal_mask, output_paths["mask"])
 
-# ---------------------------------------------------------------------------
-# 3. Verification
-# ---------------------------------------------------------------------------
-future_positions = ~causal_mask
+    # -----------------------------------------------------------------------
+    # 3. Verification
+    # -----------------------------------------------------------------------
+    future_positions = ~causal_mask
 
-assert head1_weights.shape == (4, 4) and head2_weights.shape == (4, 4), "Weights should be (4, 4)"
-assert causal_mask.shape == (4, 4), "Mask should be (4, 4)"
-for weights in [head1_weights, head2_weights]:
-    assert torch.allclose(weights.sum(dim=-1), torch.ones(4), atol=TOLERANCE), "Rows should sum to 1"
-    assert (weights >= 0).all(), "Weights should be nonnegative"
-    assert (weights[future_positions] == 0).all(), "Future positions should be exactly zero"
-assert torch.allclose(difference, head1_weights - head2_weights), "Difference should be head1 - head2"
-assert not torch.allclose(head1_weights, head2_weights, atol=1e-2), "Heads should differ"
-for path in output_paths.values():
-    assert path.is_file(), f"{path} was not created"
-    assert path.stat().st_size > 0, f"{path} is empty"
+    assert head1_weights.shape == (4, 4) and head2_weights.shape == (4, 4), "Weights should be (4, 4)"
+    assert causal_mask.shape == (4, 4), "Mask should be (4, 4)"
+    for weights in [head1_weights, head2_weights]:
+        assert torch.allclose(weights.sum(dim=-1), torch.ones(4), atol=TOLERANCE), "Rows should sum to 1"
+        assert (weights >= 0).all(), "Weights should be nonnegative"
+        assert (weights[future_positions] == 0).all(), "Future positions should be exactly zero"
+    assert torch.allclose(difference, head1_weights - head2_weights), "Difference should be head1 - head2"
+    assert not torch.allclose(head1_weights, head2_weights, atol=1e-2), "Heads should differ"
+    for path in output_paths.values():
+        assert path.is_file(), f"{path} was not created"
+        assert path.stat().st_size > 0, f"{path} is empty"
 
-print("Saved figures:")
-for path in output_paths.values():
-    print(f"  {path.relative_to(IMAGES_DIR.parent)}  ({path.stat().st_size // 1024} KB)")
-print("All checks passed.")
+    print("Saved figures:")
+    for path in output_paths.values():
+        print(f"  {path.relative_to(IMAGES_DIR.parent)}  ({path.stat().st_size // 1024} KB)")
+    print("All checks passed.")
+
+
+if __name__ == "__main__":
+    main()

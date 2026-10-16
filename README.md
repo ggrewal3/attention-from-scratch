@@ -1,12 +1,190 @@
-# attention-from-scratch
-Implementing transformer attention from scratch using Python and PyTorch, from dot products to multi-head attention.
+# Attention From Scratch
 
-## Project purpose
+Transformer attention implemented step by step with plain PyTorch tensor
+operations, from a single dot product up to multi-head causal self-attention.
 
-An educational project to understand transformer attention both mathematically
-and in code. Each milestone adds one small idea on top of the previous one.
+The goal is to **understand the mathematics of attention**, not to train a
+language model. Every script prints its intermediate tensors, so each step can
+be checked by hand, and verifies its own results with assertions. A unit-test
+suite checks the core mathematical properties.
 
-## Milestone 1 — Dot-product similarity
+> **Educational matrices, not learned parameters.** All embeddings and
+> projection matrices (`W_Q`, `W_K`, `W_V`, `W_O`) here are small, hand-picked
+> values chosen so the arithmetic is easy to follow. In a real transformer these
+> are learned parameters with thousands of dimensions, fitted by training on
+> large amounts of text. No training happens in this project.
+
+## Milestones
+
+| Milestone | Topic | Script | What it adds |
+|---|---|---|---|
+| M1 | Dot-product similarity | [src/dot_product.py](src/dot_product.py) | Token-to-token similarity with nested loops and with `X @ X.T` |
+| M2 | Scaled dot-product attention | [src/scaled_attention.py](src/scaled_attention.py) | Scaling by `sqrt(d_k)`, a stable manual softmax, and the weighted sum of values |
+| M3 | Q/K/V projections | [src/qkv_attention.py](src/qkv_attention.py) | Separate `W_Q`, `W_K` and `W_V`, plus experiments changing each one |
+| M4 | Causal masking | [src/causal_attention.py](src/causal_attention.py) | A lower-triangular mask and a future-token leakage experiment |
+| M5 | Multi-head attention | [src/multi_head_attention.py](src/multi_head_attention.py) | Two independent heads, concatenation and output projection `W_O` |
+| M6 | Attention visualization | [src/visualize_attention.py](src/visualize_attention.py) | Heatmaps of M5's attention weights and the causal mask |
+| M7 | Verification and documentation | [tests/test_attention.py](tests/test_attention.py) | Unit tests, a correctness review and this README |
+
+## Architecture (M5)
+
+Each head runs the full attention computation on its own. The causal mask is
+applied **after** the scaled scores are computed and **before** softmax.
+
+```mermaid
+flowchart TD
+    X["Input embeddings X<br/>(4 × 4)"]
+
+    subgraph HEAD1["Head 1"]
+        direction TB
+        P1["Q/K/V projections<br/>Q₁ = X·W_Q1, K₁ = X·W_K1, V₁ = X·W_V1<br/>(4 × 2 each)"]
+        S1["Scaled scores<br/>Q₁·K₁ᵀ / √d_k  (4 × 4)"]
+        C1["Causal mask<br/>future positions → −∞"]
+        A1["Softmax over keys<br/>attention weights (4 × 4)"]
+        O1["Weighted sum of values<br/>weights · V₁  (4 × 2)"]
+        P1 --> S1 --> C1 --> A1 --> O1
+    end
+
+    subgraph HEAD2["Head 2"]
+        direction TB
+        P2["Q/K/V projections<br/>Q₂ = X·W_Q2, K₂ = X·W_K2, V₂ = X·W_V2<br/>(4 × 2 each)"]
+        S2["Scaled scores<br/>Q₂·K₂ᵀ / √d_k  (4 × 4)"]
+        C2["Causal mask<br/>future positions → −∞"]
+        A2["Softmax over keys<br/>attention weights (4 × 4)"]
+        O2["Weighted sum of values<br/>weights · V₂  (4 × 2)"]
+        P2 --> S2 --> C2 --> A2 --> O2
+    end
+
+    X --> P1
+    X --> P2
+    O1 --> CAT["Concatenate<br/>[head₁ | head₂]  (4 × 4)"]
+    O2 --> CAT
+    CAT --> WO["Output projection<br/>· W_O  (4 × 4)"]
+    WO --> Y["Contextual output<br/>(4 × 4)"]
+```
+
+## Installation
+
+Requires Python 3.10 or newer.
+
+```bash
+git clone https://github.com/ggrewal3/attention-from-scratch.git
+cd attention-from-scratch
+
+python3 -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+
+pip install -r requirements.txt    # torch, numpy, matplotlib
+```
+
+## Running the milestones
+
+Run each script from the repository root:
+
+```bash
+python src/dot_product.py
+python src/scaled_attention.py
+python src/qkv_attention.py
+python src/causal_attention.py
+python src/multi_head_attention.py
+python src/visualize_attention.py   # writes the PNGs in images/
+```
+
+Each script prints labeled intermediate tensors and ends with
+`All checks passed.` If any assertion fails, the script stops with an
+`AssertionError` that describes what went wrong.
+
+## Automated tests
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+The suite uses Python's built-in `unittest` and imports the real functions and
+matrices from `src/`. The tests check mathematical properties rather than
+hardcoded attention matrices:
+
+- **Dot-product similarity:** the nested loops match the dot-product definition and `X @ X.T`.
+- **Scaled attention:** scaling by `sqrt(d_k)`, rows that sum to 1, no negative weights, outputs that are weighted sums of the values.
+- **Q/K/V projections:** projection shapes; separate projections break symmetry; changing `W_V` changes the outputs but not the weights.
+- **Causal masking:** mask orientation, `-inf` scores and exactly-zero weights in the future, and no leakage from *any* later position.
+- **Multi-head attention:** heads are independent, the concatenation layout, `W_O` acting row by row, and masking surviving the projection.
+- **Numerical stability:** scores in the hundreds or thousands stay finite and normalized.
+
+A successful run lists every test followed by `ok` and ends like this:
+
+```
+Ran 44 tests in 0.010s        (time varies)
+
+OK
+```
+
+Any `FAIL` or `ERROR` line names the exact property that broke.
+
+## Visualizations
+
+M6 renders the actual M5 attention weights computed by the code (see the
+[M6 section](#m6--attention-visualization) for how to read them):
+
+| Head 1: favors the current token | Head 2: favors the previous token |
+|---|---|
+| ![Head 1 Attention](images/head1_attention.png) | ![Head 2 Attention](images/head2_attention.png) |
+| **Head 1 − Head 2** | **Causal mask** |
+| ![Difference Between Heads](images/head_difference.png) | ![Causal Mask](images/causal_mask.png) |
+
+## Key learning outcomes
+
+- **Dot-product similarity:** how `Q @ K.T` scores every query against every key at once.
+- **Score scaling:** why dividing by `sqrt(d_k)` keeps softmax from saturating as dimensions grow.
+- **Softmax normalization:** turning scores into nonnegative weights that sum to 1, and doing it in a numerically stable way.
+- **Q/K/V projections:** queries and keys decide *where* attention goes; values decide *what* information moves.
+- **Causal masking:** setting future scores to `-inf` *before* softmax gives those positions exactly zero weight.
+- **Multi-head attention:** independent heads can produce different patterns from the same input.
+- **Output projection:** `W_O` mixes features from all heads, one token at a time.
+- **No future-token leakage:** the leakage experiments and tests show that a later token can never change an earlier output, even after concatenation and `W_O`.
+
+## Scope and limitations
+
+- All projection matrices are **manually specified**. Nothing is learned.
+- **No training** happens: there is no loss function, gradient descent or backpropagation.
+- **No language generation:** there is no tokenizer, vocabulary or next-token prediction.
+- This is **not a complete transformer or GPT model**. Positional encoding,
+  feed-forward layers, residual connections, layer normalization and stacked
+  blocks are not implemented.
+- The attention patterns (for example "self" vs "previous token") are
+  **designed demonstrations**, not learned linguistic relationships.
+- Sizes are tiny (2–4 dimensions, 3–4 tokens) so every number can be checked by hand.
+
+## Project structure
+
+```
+attention-from-scratch/
+├── src/
+│   ├── dot_product.py            # M1
+│   ├── scaled_attention.py       # M2
+│   ├── qkv_attention.py          # M3
+│   ├── causal_attention.py       # M4
+│   ├── multi_head_attention.py   # M5
+│   └── visualize_attention.py    # M6
+├── tests/
+│   └── test_attention.py         # M7
+├── images/                       # heatmaps generated by M6
+├── requirements.txt
+└── README.md
+```
+
+Every module in `src/` keeps its inputs and calculation functions at the top
+level and its demonstration output inside `main()`. This means the modules can
+be imported (by the tests and by M6) without printing anything.
+
+---
+
+# Milestone details
+
+The sections below document each milestone in depth, including inputs,
+intermediate results and experiments.
+
+## M1 — Dot-Product Similarity
 
 **Objective:** compute token-to-token similarity using the dot product in two ways:
 
@@ -26,21 +204,13 @@ embeddings = torch.tensor([
 ])
 ```
 
-## Installation
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-## Run
+### Run
 
 ```bash
 python src/dot_product.py
 ```
 
-## Expected output
+### Expected output
 
 ```
 === Embeddings ===
@@ -77,7 +247,7 @@ Results match expected values:   True
 All checks passed.
 ```
 
-## Matrix shapes explained
+### Matrix shapes explained
 
 | Tensor | Shape | Meaning |
 |---|---|---|
@@ -100,7 +270,7 @@ cat  · eats = (1 * 0) + (0 * 1) = 0
 - **Column j:** how every token compares to token `j`.
 - The matrix is symmetric because `a · b == b · a`.
 
-## Raw dot-product similarity vs. transformer attention
+### Raw dot-product similarity vs. transformer attention
 
 This milestone computes **raw** similarity only. Real transformer attention adds
 several steps on top of it, which later milestones will cover:
@@ -120,7 +290,7 @@ why "fish" scores 2 with itself while "cat" scores 1.
 
 ---
 
-## Milestone 2 — Scaled dot-product attention
+## M2 — Scaled Dot-Product Attention
 
 **Objective:** understand how raw similarity scores become attention weights,
 and how those weights combine value vectors into contextual representations.
@@ -139,7 +309,7 @@ Attention(Q, K, V) = softmax( Q @ K.T / sqrt(d_k) ) @ V
 |---|---|---|
 | Q, K, V | `Q = K = V = embeddings` | **Query:** what a token looks for. **Key:** what a token offers to be matched against. **Value:** the information a token passes along. |
 | Raw scores | `Q @ K.T` | Dot product of every query with every key: how well they match. |
-| Scaling | `raw_scores / sqrt(d_k)` | `d_k = K.shape[-1]` is the key length. Dot products grow with `d_k`, so dividing keeps the logits in a moderate range. Every value changes, but the shape doesn't. |
+| Scaling | `raw_scores / sqrt(d_k)` | `d_k = K.shape[-1]` is the key length. A dot product sums `d_k` terms, so its typical size grows roughly like `sqrt(d_k)`. Dividing by `sqrt(d_k)` keeps the logits in a moderate range. Every value changes, but the shape doesn't. |
 | Softmax | `torch.softmax(scaled, dim=-1)` | Turns each row into positive weights that sum to 1. `dim=-1` (the last dimension) normalizes across the columns of each row, so each query gets its own distribution over keys. |
 | Weighted sum | `attention_weights @ V` | Each output row is a blend of all value vectors, weighted by attention. |
 
@@ -224,7 +394,7 @@ visualization.
 
 ---
 
-## Milestone 3 — Query, Key, and Value projections
+## M3 — Query, Key, and Value Projections
 
 **Objective:** give Q, K and V their own projection matrices instead of using
 the raw embeddings, and see how each projection affects attention.
